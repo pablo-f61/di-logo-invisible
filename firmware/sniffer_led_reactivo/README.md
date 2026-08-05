@@ -13,3 +13,4 @@ Sistema de visualización y audio generativo en tiempo real a partir de señales
 2. **Ejecutar Interfaz:** Abrir `web/index.html` en Chrome.
 3. **Conectar Serial:** Presionar la tecla **`C`** para seleccionar el puerto de la placa.
 4. **Abrir Proyector:** Presionar la tecla **`P`** para abrir la ventana secundaria y arrastrarla al proyector.
+5. **Ocultar el HUD** Presionando la tecla  **`H`** 
