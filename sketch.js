@@ -2,6 +2,11 @@
 const canalProyector = new BroadcastChannel('instalacion_diálogo');
 let ventanaProyector = null;
 
+// 🧪 MODO SIMULACIÓN (Para probar SIN la placa USB)
+// Cambiar a 'true' para generar peticiones falsas
+let MOCK_MODE = true; 
+let ultimoMockAuto = 0; // Control de tiempo para envío automático
+
 // 🎛️ Parámetros interactivos
 const params = {
     // Visuales
@@ -112,11 +117,16 @@ function setup() {
     cbPulsosEntidades.parent(guiDiv);
 
     reverb = new p5.Reverb();
-    port = createSerial();
 
-    const usedPorts = usedSerialPorts();
-    if (usedPorts.length > 0) {
-        port.open(usedPorts[0], 115200);
+    // Solo abrimos el puerto si NO estamos en MOCK_MODE
+    if (!MOCK_MODE) {
+        port = createSerial();
+        const usedPorts = usedSerialPorts();
+        if (usedPorts.length > 0) {
+            port.open(usedPorts[0], 115200);
+        }
+    } else {
+        console.log("🛠️ MODO SIMULACIÓN ACTIVO: Presioná 'N' para generar un nodo o esperá el timer.");
     }
 
     iniciarDrone();
@@ -145,39 +155,21 @@ function draw() {
     const ahora = millis();
     const FADE_DURACION = 3000;
 
-    // ---------------- SERIAL ----------------
-    if (port && port.availableBytes() > 0) {
-        let str = port.readUntil("\n");
-        if (str.length > 0) {
-            str = str.trim();
-            const partes = str.split(",");
-
-            if (partes.length >= 3 && partes[0] === "PROBE") {
-                const x = random(width);
-                const y = random(height);
-
-                const rssi = int(partes[2].trim());
-                const ssid = partes.length >= 4 ? partes[3].trim() : "";
-                const mac = partes[1].trim();
-
-                const nuevaEntidad = new Entidad(x, y, rssi);
-                entidades.push(nuevaEntidad);
-
-                // Imprimir en consola central de texto blanco
-                logSerialData(mac, rssi, ssid);
-
-                // Transmitir al proyector
-                canalProyector.postMessage({
-                    tipo: 'NUEVA_ENTIDAD',
-                    x: x,
-                    y: y,
-                    rssi: rssi,
-                    anchoOrigen: width,
-                    altoOrigen: height
-                });
-
-                userStartAudio();
+    // ---------------- SERIAL / MOCK ----------------
+    if (!MOCK_MODE) {
+        // --- MODO REAL CON PLACA USB ---
+        if (port && port.availableBytes() > 0) {
+            let str = port.readUntil("\n");
+            if (str.length > 0) {
+                procesarMensajeSerial(str.trim());
             }
+        }
+    } else {
+        // --- MODO SIMULACIÓN (AUTOMÁTICO) ---
+        // Genera un evento simulado cada 2.5 segundos
+        if (ahora - ultimoMockAuto > 2500) {
+            generarProbeSimulado();
+            ultimoMockAuto = ahora;
         }
     }
 
@@ -257,6 +249,51 @@ function draw() {
     actualizarCampo(densidad);
 }
 
+// ---------------- PROCESADOR DE MENSAJES Y SIMULADOR ----------------
+function procesarMensajeSerial(str) {
+    const partes = str.split(",");
+
+    if (partes.length >= 3 && partes[0] === "PROBE") {
+        const x = random(width);
+        const y = random(height);
+
+        const rssi = int(partes[2].trim());
+        const ssid = partes.length >= 4 ? partes[3].trim() : "";
+        const mac = partes[1].trim();
+
+        const nuevaEntidad = new Entidad(x, y, rssi);
+        entidades.push(nuevaEntidad);
+
+        // Imprimir en consola central de texto blanco
+        logSerialData(mac, rssi, ssid);
+
+        // Transmitir al proyector
+        canalProyector.postMessage({
+            tipo: 'NUEVA_ENTIDAD',
+            x: x,
+            y: y,
+            rssi: rssi,
+            anchoOrigen: width,
+            altoOrigen: height
+        });
+
+        userStartAudio();
+    }
+}
+
+// Función auxiliar para simular la llegada de un paquete de la placa
+function generarProbeSimulado() {
+    const macsFalsas = ["AA:BB:CC:11:22:33", "44:55:66:77:88:99", "12:34:56:78:90:AB", "FE:DC:BA:98:76:54"];
+    const ssidsFalsos = ["MiWiFi_Casa", "Fibertel-2.4G", "BROADCAST", "iPhone_Pablo", "Lab_Artes"];
+    
+    const macRandom = random(macsFalsas);
+    const rssiRandom = floor(random(-88, -35));
+    const ssidRandom = random(ssidsFalsos);
+
+    const rawString = `PROBE,${macRandom},${rssiRandom},${ssidRandom}`;
+    procesarMensajeSerial(rawString);
+}
+
 // ---------------- INPUTS Y TECLAS ----------------
 function mousePressed() {
     userStartAudio();
@@ -267,12 +304,37 @@ function windowResized() {
 }
 
 function keyPressed() {
+    // 🔑 TECLA C: Conectar/Desconectar el puerto manualmente (Modo Real)
     if (key === "c" || key === "C") {
         userStartAudio();
-        if (!port.opened()) {
-            port.open(115200);
+        if (!MOCK_MODE && port) {
+            if (!port.opened()) {
+                port.open(115200);
+            } else {
+                port.close();
+            }
+        }
+    }
+
+    // 🔑 TECLA M: Alternar entre MOCK_MODE y Puerto Serie Real
+    if (key === "m" || key === "M") {
+        MOCK_MODE = !MOCK_MODE;
+
+        if (!MOCK_MODE) {
+            console.log("🔌 MODO REAL: Intentando conectar puerto serial...");
+            if (!port) port = createSerial();
+            
+            const usedPorts = usedSerialPorts();
+            if (usedPorts.length > 0) {
+                port.open(usedPorts[0], 115200);
+            } else {
+                console.warn("⚠️ No se encontraron puertos serie activos.");
+            }
         } else {
-            port.close();
+            console.log("🛠️ MODO SIMULACIÓN: Desconectando puerto real...");
+            if (port && port.opened()) {
+                port.close();
+            }
         }
     }
     
@@ -282,10 +344,17 @@ function keyPressed() {
         if (guiDiv) guiDiv.style("display", hudVisible ? "flex" : "none");
     }
 
+    // 🔑 TECLA P: Abre la ventana proyectada
     if (key === "p" || key === "P") {
         ventanaProyector = window.open("proyector.html", "Proyector", "width=1920,height=1080");
     }
+
+    // 🔑 TECLA N: Genera un nodo simulado manualmente (ideal para testear rápido)
+    if (key === "n" || key === "N") {
+        generarProbeSimulado();
+    }
 }
+
 
 // ---------------- LOG DE DATOS EN BLANCO Y NEGRO ----------------
 function logSerialData(mac, rssi, ssid) {
