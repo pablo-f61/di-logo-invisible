@@ -1,0 +1,38 @@
+body {
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    background-color: #000000;
+    font-family: monospace;
+    color: #939191;
+}
+
+canvas {
+    display: block;
+}
+
+/* 📡 LOG DE DATOS CRUDO / OPERATIVO */
+#serial-log {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 800px;
+    max-height: 600px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    pointer-events: none;
+    z-index: 10;
+}
+
+.log-entry {
+    color: #716c6c;
+    font-size: 20px;
+    font-family: monospace;
+    width: 100%;
+    text-align: center;
+    white-space: nowrap;
+}
