@@ -1,160 +1,309 @@
 /*
-  =====================================================================
-  DIÁLOGO INVISIBLE - Sniffer WiFi para ESP8266 + LED reactivo
-  =====================================================================
-*/
 
+
+
+
+
+
+
+
+
+/*
+  ============================================================
+  DIALOGO INVISIBLE
+  ESP8266 - Sniffer WiFi + LED por proximidad
+  ============================================================
+
+  RSSI fuerte (>= -60)  -> LED ENCENDIDO
+  RSSI débil (< -60)    -> LED APAGADO
+
+  El ESP8266 escucha Probe Requests de dispositivos WiFi
+  cercanos y utiliza la intensidad de señal (RSSI) como
+  aproximación de proximidad.
+*/
+/*
 #include <ESP8266WiFi.h>
 
 extern "C" {
   #include "user_interface.h"
 }
 
-// ---------------------------------------------------------------------
+// ------------------------------------------------------------
 // CONFIGURACIÓN
-// ---------------------------------------------------------------------
-#define MAX_CACHE 64
-#define COOLDOWN_MS 3000        // 3 segundos entre registros de una misma MAC
-#define CHANNEL_HOP_MS 250      // Salto entre canales 1 al 13
+// ------------------------------------------------------------
 
+#define MAX_CACHE 60
+#define COOLDOWN_MS 4000
+#define CHANNEL_HOP_MS 300
+
+// LED integrado de la LOLIN
+// En esta placa LOW = encendido
+//                       HIGH = apagado
 #define LED_PIN LED_BUILTIN
 
-#define VENTANA_RSSI_MS 2000
-#define BLINK_LENTO_MS 800
-#define BLINK_RAPIDO_MS 80
+// Umbral de proximidad
+// Cuanto MENOS negativo, más fuerte es la señal.
+#define RSSI_UMBRAL -60
 
-// ---------------------------------------------------------------------
-// Cache circular de MACs
-// ---------------------------------------------------------------------
+
+// ------------------------------------------------------------
+// ESTRUCTURA DEL RECEPTOR WIFI
+// ------------------------------------------------------------
+
+struct RxControl {
+  signed rssi:8;
+  unsigned rate:4;
+  unsigned is_group:1;
+  unsigned :27;
+  unsigned sig_mode:2;
+  unsigned legacy_length:12;
+  unsigned damatch0:1;
+  unsigned damatch1:1;
+  unsigned bssidmatch0:1;
+  unsigned bssidmatch1:1;
+  unsigned MCS:7;
+  unsigned CWB:1;
+  unsigned HT_length:16;
+  unsigned Smoothing:1;
+  unsigned Not_Sounding:1;
+  unsigned :1;
+  unsigned Aggregation:1;
+  unsigned STBC:2;
+  unsigned FEC_CODING:1;
+  unsigned SGI:1;
+  unsigned rx_end_state:8;
+  unsigned ampdu_cnt:8;
+  unsigned channel:4;
+  unsigned :12;
+};
+
+
+// ------------------------------------------------------------
+// CACHE DE MAC
+// ------------------------------------------------------------
+
 struct SeenMac {
   uint8_t mac[6];
   unsigned long lastSeen;
 };
 
 SeenMac cache[MAX_CACHE];
-int cacheHead = 0;
-int cacheTotal = 0;
+int cacheCount = 0;
+
+
+// ------------------------------------------------------------
+// EVITAR REPETICIONES DE LA MISMA MAC
+// ------------------------------------------------------------
 
 bool alreadySeen(uint8_t *mac) {
+
   unsigned long now = millis();
 
-  for (int i = 0; i < cacheTotal; i++) {
+  for (int i = 0; i < cacheCount; i++) {
+
     if (memcmp(cache[i].mac, mac, 6) == 0) {
+
       if (now - cache[i].lastSeen < COOLDOWN_MS) {
         return true;
       }
+
       cache[i].lastSeen = now;
       return false;
     }
   }
 
-  memcpy(cache[cacheHead].mac, mac, 6);
-  cache[cacheHead].lastSeen = now;
+  int idx;
 
-  cacheHead = (cacheHead + 1) % MAX_CACHE;
-  if (cacheTotal < MAX_CACHE) cacheTotal++;
+  if (cacheCount < MAX_CACHE) {
+    idx = cacheCount++;
+  } else {
+    idx = 0;
+  }
+
+  memcpy(cache[idx].mac, mac, 6);
+  cache[idx].lastSeen = now;
 
   return false;
 }
 
-// ---------------------------------------------------------------------
-// Variables para el LED reactivo
-// ---------------------------------------------------------------------
-int8_t mejorRSSIVentana = -100;
-int8_t mejorRSSIActual = -100;
-unsigned long inicioVentana = 0;
 
-unsigned long ultimoBlink = 0;
-bool estadoLed = false;
+// ------------------------------------------------------------
+// CALLBACK DE CAPTURA WIFI
+// ------------------------------------------------------------
 
-// ---------------------------------------------------------------------
-// Callback de captura (usa el buffer crudo del SDK)
-// ---------------------------------------------------------------------
 void promisc_cb(uint8_t *buf, uint16_t len) {
-  // Los paquetes con payload útil miden al menos 12 bytes de header + 24 de MAC header
-  if (len < 36) return;
 
-  // En el SDK de ESP8266, el RSSI se encuentra en el primer byte de control
-  int8_t rssi = (int8_t)buf[0];
+  if (len < 12) {
+    return;
+  }
 
-  // La trama 802.11 real arranca tras los 12 bytes del encabezado de recepción
+  RxControl *sniffer = (RxControl*) buf;
+
+  int8_t rssi = sniffer->rssi;
+
   uint8_t *packet = buf + 12;
-  uint16_t frameControl = packet[0] | (packet[1] << 8);
 
-  // Subtipo Probe Request (Management 0x00, Subtipo 0x04 -> 0x0040)
+  uint16_t frameControl =
+    packet[0] | (packet[1] << 8);
+
+
+  // ----------------------------------------------------------
+  // PROBE REQUEST
+  // ----------------------------------------------------------
+
   if ((frameControl & 0x00FC) == 0x0040) {
-    uint8_t *macBytes = &packet[10]; // Dirección de origen (Transmitter Address)
 
+    uint8_t *macBytes = &packet[10];
+
+
+    // Evitar repetir demasiado la misma MAC
     if (alreadySeen(macBytes)) {
       return;
     }
 
+
+    // --------------------------------------------------------
+    // MAC
+    // --------------------------------------------------------
+
     char macStr[18];
-    snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
-             macBytes[0], macBytes[1], macBytes[2],
-             macBytes[3], macBytes[4], macBytes[5]);
+
+    snprintf(
+      macStr,
+      sizeof(macStr),
+      "%02X:%02X:%02X:%02X:%02X:%02X",
+      macBytes[0],
+      macBytes[1],
+      macBytes[2],
+      macBytes[3],
+      macBytes[4],
+      macBytes[5]
+    );
+
+
+    // --------------------------------------------------------
+    // SSID
+    // --------------------------------------------------------
 
     String ssid = "BROADCAST";
-    // El SSID se encuentra en el tagged parameter 0 (offset 24 de la trama 802.11)
-    if (len >= 12 + 26) {
-      uint8_t tagType = packet[24];
-      uint8_t ssidLen = packet[25];
-      if (tagType == 0 && ssidLen > 0 && ssidLen <= 32 && (len >= 12 + 26 + ssidLen)) {
-        char ssidBuf[33];
-        memset(ssidBuf, 0, sizeof(ssidBuf));
-        memcpy(ssidBuf, &packet[26], ssidLen);
-        ssid = String(ssidBuf);
-      }
+
+    uint8_t ssidLen = packet[25];
+
+    if (ssidLen > 0 && ssidLen < 32) {
+
+      char ssidBuf[33];
+
+      memset(ssidBuf, 0, sizeof(ssidBuf));
+
+      memcpy(
+        ssidBuf,
+        &packet[26],
+        ssidLen
+      );
+
+      ssid = String(ssidBuf);
     }
 
-    Serial.printf("PROBE,%s,%d,%s\n", macStr, rssi, ssid.c_str());
 
-    if (rssi > mejorRSSIVentana) {
-      mejorRSSIVentana = rssi;
+    // --------------------------------------------------------
+    // MOSTRAR EN MONITOR SERIE
+    // --------------------------------------------------------
+
+    Serial.printf(
+      "PROBE, %s, %d, %s\n",
+      macStr,
+      rssi,
+      ssid.c_str()
+    );
+
+
+    // --------------------------------------------------------
+    // LED SEGÚN RSSI
+    // --------------------------------------------------------
+
+    if (rssi >= RSSI_UMBRAL) {
+
+      // Señal fuerte
+      digitalWrite(LED_PIN, LOW);
+
+    } else {
+
+      // Señal débil
+      digitalWrite(LED_PIN, HIGH);
     }
   }
 }
 
-// ---------------------------------------------------------------------
-void setup() {
-  Serial.begin(115200);
-  delay(300);
 
+// ------------------------------------------------------------
+// SETUP
+// ------------------------------------------------------------
+
+void setup() {
+
+  Serial.begin(115200);
+
+  delay(1000);
+
+  Serial.println();
+  Serial.println("--------------------------------");
+  Serial.println(" DIALOGO INVISIBLE");
+  Serial.println(" ESP8266 WiFi Sniffer");
+  Serial.println("--------------------------------");
+
+
+  // LED
   pinMode(LED_PIN, OUTPUT);
-  digitalWrite(LED_PIN, HIGH); // LED integrado apaga en HIGH
+
+  // LED apagado al comenzar
+  digitalWrite(LED_PIN, HIGH);
+
+
+  // ----------------------------------------------------------
+  // MODO PROMISCUO
+  // ----------------------------------------------------------
 
   wifi_set_opmode(STATION_MODE);
+
   wifi_promiscuous_enable(0);
+
   wifi_set_promiscuous_rx_cb(promisc_cb);
+
   wifi_promiscuous_enable(1);
+
   wifi_set_channel(1);
 
-  inicioVentana = millis();
+
+  Serial.println("Modo promiscuo activado.");
+  Serial.println("Buscando dispositivos WiFi...");
+  Serial.printf(
+    "Umbral RSSI: %d dBm\n",
+    RSSI_UMBRAL
+  );
 }
 
-// ---------------------------------------------------------------------
+
+// ------------------------------------------------------------
+// LOOP
+// ------------------------------------------------------------
+
 void loop() {
+
+  // ----------------------------------------------------------
+  // CAMBIO DE CANAL
+  // ----------------------------------------------------------
+
   static unsigned long lastChannelChange = 0;
+
   if (millis() - lastChannelChange > CHANNEL_HOP_MS) {
+
     uint8_t currentChannel = wifi_get_channel();
+
     currentChannel = (currentChannel % 13) + 1;
+
     wifi_set_channel(currentChannel);
+
     lastChannelChange = millis();
   }
-
-  if (millis() - inicioVentana > VENTANA_RSSI_MS) {
-    mejorRSSIActual = mejorRSSIVentana;
-    mejorRSSIVentana = -100;
-    inicioVentana = millis();
-  }
-
-  int8_t rssiClamp = constrain(mejorRSSIActual, -100, -30);
-  int intervaloBlink = map(rssiClamp, -80, -40, BLINK_LENTO_MS, BLINK_RAPIDO_MS);
-  intervaloBlink = constrain(intervaloBlink, BLINK_RAPIDO_MS, BLINK_LENTO_MS);
-
-  if (millis() - ultimoBlink > (unsigned long)intervaloBlink) {
-    estadoLed = !estadoLed;
-    digitalWrite(LED_PIN, estadoLed ? LOW : HIGH);
-    ultimoBlink = millis();
-  }
 }
+*/
