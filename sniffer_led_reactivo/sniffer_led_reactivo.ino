@@ -8,7 +8,7 @@
     últimos segundos.
   =====================================================================
 */
-
+/*
 #include <ESP8266WiFi.h>
 extern "C" {
   #include "user_interface.h"
@@ -199,3 +199,4 @@ void loop() {
     ultimoBlink = millis();
   }
 }
+*/
