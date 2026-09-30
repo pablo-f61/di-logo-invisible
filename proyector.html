@@ -4,17 +4,25 @@
   <meta charset="utf-8" />
   <title>Proyector - Instalación</title>
   <style>
-    body { margin: 0; padding: 0; overflow: hidden; background: #000; }
+    body { 
+      margin: 0; 
+      padding: 0; 
+      overflow: hidden; 
+      background: #000000; 
+    }
+    canvas {
+      display: block;
+    }
   </style>
 
-  <!-- Librerías básicas -->
+  <!-- Librerías -->
   <script src="libraries/p5.min.js"></script>
 
-  <!-- Clases de dibujo -->
+  <!-- Clases requeridas -->
   <script src="Entidad.js"></script>
   <script src="Conexion.js"></script>
 
-  <!-- Script liviano del proyector -->
+  <!-- Lógica de render proyector -->
   <script src="sketch_proyector.js"></script>
 </head>
 <body>

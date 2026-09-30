@@ -1,76 +1,134 @@
-const entidades = [];
-const conexiones = [];
-const canal = new BroadcastChannel('instalacion_diálogo');
+const canal = new BroadcastChannel('instalacion_dialogo');
 
-// Mismos parámetros visuales que el sketch principal
+let entidadesRecibidas = [];
+let conexionesRecibidas = [];
+
 const params = {
-    distConexion: 160,
-    probConexion: 0.015,
-    velGlobal: 2.5,
-    tamanoBase: 1.0,
-    opacidadLineas: 3.0,
-    brilloParticulas: 1.0
+  distConexion: 160,
+  opacidadLineas: 3.0,
+  tamanoBase: 1.0,
+  brilloParticulas: 1.0
 };
 
 function setup() {
-    createCanvas(windowWidth, windowHeight);
-    
-    // Escuchar cuando el sketch principal envía una nueva entidad
-    canal.onmessage = (event) => {
-        if (event.data.tipo === 'NUEVA_ENTIDAD') {
-            // Escalar la posición X e Y a la resolución del proyector
-            const x = map(event.data.x, 0, 1920, 0, width);
-            const y = map(event.data.y, 0, 1080, 0, height);
-            entidades.push(new Entidad(x, y, event.data.rssi));
-        }
-    };
+  createCanvas(windowWidth, windowHeight);
+
+  canal.onmessage = (event) => {
+    const data = event.data;
+
+    if (data.tipo === 'SYNC_FRAME') {
+      entidadesRecibidas = data.entidades || [];
+      conexionesRecibidas = data.conexiones || [];
+      if (data.params) {
+        Object.assign(params, data.params);
+      }
+    } else if (data.tipo === 'LIMPIAR_TODO') {
+      entidadesRecibidas = [];
+      conexionesRecibidas = [];
+    }
+  };
 }
 
 function draw() {
-    background(0);
-    const ahora = millis();
-    const FADE_DURACION = 3000;
+  background(0,45);
 
-    // Eliminar expiradas y dibujar entidades
-    for (let i = entidades.length - 1; i >= 0; i--) {
-        const edad = ahora - entidades[i].nacimiento;
-        if (edad > entidades[i].vidaTotal) {
-            entidades.splice(i, 1);
-        }
+  // 1. Dibujar conexiones sincronizadas
+  for (const c of conexionesRecibidas) {
+    const ax = c.nax * width;
+    const ay = c.nay * height;
+    const bx = c.nbx * width;
+    const by = c.nby * height;
+
+    const d = dist(ax, ay, bx, by);
+    const alphaBase = map(d, 0, params.distConexion, 180, 20);
+    const alphaFinal = constrain(
+      (alphaBase * c.vida * params.opacidadLineas) + ((c.brilloFlash || 0) * 255),
+      0,
+      255
+    );
+
+    const grosor = map(c.brilloFlash || 0, 0, 1, 0.9, 3.2);
+
+    stroke(255, constrain(alphaFinal, 0, 255));
+    strokeWeight(grosor);
+    noFill();
+
+    beginShape();
+    const pasos = 10;
+    for (let i = 0; i <= pasos; i++) {
+      const t = i / pasos;
+      let x = lerp(ax, bx, t);
+      let y = lerp(ay, by, t);
+
+      const n = noise(x * 0.01, y * 0.01, frameCount * 0.01 + c.seed);
+      const offset = map(n, 0, 1, -10, 10);
+
+      const angle = atan2(by - ay, bx - ax);
+      const perp = angle + HALF_PI;
+
+      x += cos(perp) * offset * sin(t * PI);
+      y += sin(perp) * offset * sin(t * PI);
+
+      curveVertex(x, y);
+    }
+    endShape();
+  }
+
+  // 2. Dibujar entidades sincronizadas (Estética de núcleos y halos)
+  noStroke();
+  for (const e of entidadesRecibidas) {
+    const px = e.nx * width;
+    const py = e.ny * height;
+    const escala = e.escala !== undefined ? e.escala : 1.0;
+    const tamEscalado = e.tamBase * params.tamanoBase * e.factorCercania * escala;
+    const brilloSonoro = e.brilloSonoro || 0;
+
+    const maduracion = constrain(e.madurez || 0, 0, 1);
+    
+    const r = lerp(70, 50, maduracion);
+    const g = lerp(235, 130, maduracion);
+    const b = lerp(150, 255, maduracion);
+
+    const potenciaHalo = map(maduracion, 0, 1, 14, 34);
+    for (let i = 5; i > 0; i--) {
+      fill(r, g, b, potenciaHalo * e.opacidad * params.brilloParticulas * 0.22);
+      ellipse(px, py, tamEscalado * i * 1.35);
     }
 
-    for (const e of entidades) {
-        const edad = ahora - e.nacimiento;
-        e.opacidad = edad > e.vidaTotal - FADE_DURACION
-            ? map(edad, e.vidaTotal - FADE_DURACION, e.vidaTotal, 1, 0)
-            : 1;
-        e.mover();
-        e.dibujar();
+    const alphaNucleo = map(brilloSonoro, 0, 1, 90, 255) * min(1.0, e.opacidad) * params.brilloParticulas;
+    const tamNucleo = max(1.5, tamEscalado * map(brilloSonoro, 0, 1, 0.6, 2.0));
+
+    if (brilloSonoro > 0.05) {
+      fill(255, 255, 255, brilloSonoro * 150 * params.brilloParticulas);
+      ellipse(px, py, tamNucleo * 2.2);
     }
 
-    // Dibujar Conexiones
-    for (let i = conexiones.length - 1; i >= 0; i--) {
-        conexiones[i].vida -= 0.015;
-        if (conexiones[i].vida <= 0.02) conexiones.splice(i, 1);
-    }
-
-    for (let i = 0; i < entidades.length; i++) {
-        for (let j = i + 1; j < entidades.length; j++) {
-            const a = entidades[i];
-            const b = entidades[j];
-            const d = dist(a.x, a.y, b.x, b.y);
-
-            if (d < params.distConexion && random() < params.probConexion) {
-                conexiones.push(new Conexion(a, b, d));
-            }
-        }
-    }
-
-    for (const c of conexiones) {
-        c.dibujar();
-    }
+    fill(255, constrain(alphaNucleo, 0, 255));
+    ellipse(px, py, tamNucleo);
+  }
 }
 
 function windowResized() {
-    resizeCanvas(windowWidth, windowHeight);
+  resizeCanvas(windowWidth, windowHeight);
+}
+
+function keyPressed() {
+  if (key === 'f' || key === 'F') {
+    alternarFullscreen();
+    return;
+  }
+
+  canal.postMessage({
+    tipo: 'COMANDO_TECLA',
+    tecla: key
+  });
+}
+
+function doubleClicked() {
+  alternarFullscreen();
+}
+
+function alternarFullscreen() {
+  const fs = fullscreen();
+  fullscreen(!fs);
 }

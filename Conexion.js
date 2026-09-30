@@ -1,45 +1,39 @@
 class Conexion {
-	constructor(a, b, d) {
-		this.a = a;
-		this.b = b;
-		this.distancia = d;
-		this.seed = random(1000);
-		this.vida = 1.0; // Ciclo de vida para desvanecerse
-	}
+  constructor(a, b, distancia) {
+    this.a = a;
+    this.b = b;
+    this.distancia = distancia;
+    this.vida = 1.0;
+    this.brilloFlash = 0.0;
+    this.seed = random(1000);
+  }
 
-	dibujar() {
-		noFill();
+  destellar() {
+    this.brilloFlash = 1.0;
+  }
 
-		// Actualizar la distancia por si las entidades se movieron
-		this.distancia = dist(this.a.x, this.a.y, this.b.x, this.b.y);
+  // Lógica (se llama siempre, se dibuje o no localmente).
+  // Antes el decaimiento vivía en dibujar(): con "Ver dibujo local" apagado
+  // el flash nunca bajaba y el proyector recibía brilloFlash = 1.0 fijo.
+  actualizar() {
+    this.brilloFlash *= 0.88;
+    if (this.brilloFlash < 0.01) this.brilloFlash = 0;
+  }
 
-		const alphaBase = map(this.distancia, 0, params.distConexion, 80, 15);
-		const alpha = alphaBase * params.opacidadLineas * this.vida;
-		stroke(255, alpha);
-		strokeWeight(0.8);
+  dibujar() {
+    const distRef = (typeof params !== "undefined" && params.distConexion) ? params.distConexion : 160;
+    const opacidadBase = map(this.distancia, 0, distRef, 180, 20);
 
-		beginShape();
+    const alphaFinal = constrain(
+      (opacidadBase * this.vida * params.opacidadLineas) + (this.brilloFlash * 255),
+      0,
+      255
+    );
 
-		const pasos = 10;
+    const grosor = map(this.brilloFlash, 0, 1, 0.9, 3.2);
 
-		for (let i = 0; i <= pasos; i++) {
-			const t = i / pasos;
-
-			let x = lerp(this.a.x, this.b.x, t);
-			let y = lerp(this.a.y, this.b.y, t);
-
-			const n = noise(x * 0.01, y * 0.01, frameCount * 0.01 + this.seed);
-			const offset = map(n, 0, 1, -10, 10);
-
-			const angle = atan2(this.b.y - this.a.y, this.b.x - this.a.x);
-			const perp = angle + HALF_PI;
-
-			x += cos(perp) * offset * sin(t * PI);
-			y += sin(perp) * offset * sin(t * PI);
-
-			curveVertex(x, y);
-		}
-
-		endShape();
-	}
+    stroke(255, constrain(alphaFinal, 0, 255));
+    strokeWeight(grosor);
+    line(this.a.x, this.a.y, this.b.x, this.b.y);
+  }
 }

@@ -1,155 +1,334 @@
 let reverb;
 
-// 🌫️ capas sonoras
-const drone = [];
-const capa = [];
-const capaGrave = [];
+// 🎻 ENSAMBLE DE DRONES GRAVES (Re2, La, Re3) que respiran con el tráfico
+const dronesGrave = [];
+let filtroDrones;
 
-// 🫀 pulso
-let pulsoOsc, pulsoOsc2;
-let pulsoEnv;
+// 🎹 SÍNTESIS CRISTALINA POLIFÓNICA (Sine + Triángulo desafinado)
+const MAX_VOCES_PULSO = 6;
+let oscsSine = [];
+let oscsTri = [];
+let envsPulso = [];
+let vozFiltro;
+let idxVozPulso = 0;
 
-let energiaPulso = 0;
-let ultimoPulso = 0;
+// 🎼 MOTOR DE CONEXIONES Y ACORDES
+const MAX_VOCES_CONEXION = 4;
+let oscsConexionSine = [];
+let oscsConexionTri = [];
+let envsConexion = [];
+let filtroConexion;
+let gainConexionesMaster;
+let ultimoDisparoAcorde = 0;
+const INTERVALO_MIN_ACORDE = 800;
 
-// ---------------- DRONE ----------------
+// 🎼 ESCALA PENTATÓNICA MENOR DE RE (15 notas: 3 octavas desde Re3 = 146.83 Hz)
+const ESCALA_PENTA_RE_MENOR = [
+  // Octava 3
+  146.83, 174.61, 196.00, 220.00, 261.63,
+  // Octava 4
+  293.66, 349.23, 392.00, 440.00, 523.25,
+  // Octava 5
+  587.33, 698.46, 783.99, 880.00, 1046.50
+];
 
-function iniciarDrone() {
-	for (let i = 0; i < 3; i++) {
-		const osc = new p5.Oscillator("sine");
+let ESCALA_BASE_CONSONANTE = [...ESCALA_PENTA_RE_MENOR];
+let nombreEscalaActual = "PENTATÓNICA MENOR DE RE (CRISTAL)";
 
-		osc.freq(random(80, 120));
-		osc.amp(0.03);
-		osc.start();
+// Frecuencias fijas para el drone continuo de fondo (Re2, La2, Re3)
+const FREQS_DRONE = [73.42, 110.14, 146.83];
+const AMP_DRONE_MAX = [0.035, 0.025, 0.020];
 
-		reverb.process(osc, 10, 5);
-
-		drone.push({
-			osc: osc,
-			offset: random(1000),
-		});
-	}
+function asegurarReverb() {
+  if (!reverb && typeof p5.Reverb !== "undefined") {
+    reverb = new p5.Reverb();
+    reverb.set(6.0, 3.5); // Reverb generosa de cola larga
+    reverb.drywet(0.55);
+  }
 }
 
-// ---------------- CAPA MEDIA ----------------
-
-function iniciarCapa() {
-	for (let i = 0; i < 2; i++) {
-		const osc = new p5.Oscillator("triangle");
-
-		osc.freq(random(150, 250));
-		osc.amp(0.015);
-		osc.start();
-
-		reverb.process(osc, 8, 4);
-
-		capa.push({
-			osc: osc,
-			offset: random(1000),
-		});
-	}
-}
-
-// ---------------- CAPA GRAVE ----------------
+// ---------------- 1. PAISAJE SONORO: DRONES CONTINUOS ----------------
 
 function iniciarCapaGrave() {
-	for (let i = 0; i < 2; i++) {
-		const osc = new p5.Oscillator("sine");
+  asegurarReverb();
+  asegurarFiltroDrones();
 
-		osc.freq(random(60, 80));
-		osc.amp(0.04);
-		osc.start();
+  for (let i = 0; i < FREQS_DRONE.length; i++) {
+    const osc = new p5.Oscillator("sine");
+    osc.disconnect();
+    if (filtroDrones) osc.connect(filtroDrones);
+    osc.freq(FREQS_DRONE[i]);
+    osc.amp(0);
+    osc.start();
 
-		reverb.process(osc, 12, 6);
-
-		capaGrave.push({
-			osc: osc,
-			offset: random(1000),
-		});
-	}
+    dronesGrave.push({
+      osc: osc,
+      maxAmp: AMP_DRONE_MAX[i],
+      seed: random(1000)
+    });
+  }
 }
 
-// ---------------- PULSO ----------------
+function iniciarDrone() {}
+function iniciarCapa() {}
+
+function asegurarFiltroDrones() {
+  if (!filtroDrones && typeof p5.LowPass !== "undefined") {
+    filtroDrones = new p5.LowPass();
+    filtroDrones.freq(520);
+    filtroDrones.res(0.4);
+    if (reverb) reverb.process(filtroDrones, 7, 4);
+  }
+}
+
+// ---------------- 2. PROBES CRISTALINOS (SINE + TRIÁNGULO DESAFINADO) ----------------
 
 function iniciarPulso() {
-	pulsoOsc = new p5.Oscillator("sine");
-	pulsoOsc.freq(60);
-	pulsoOsc.amp(0);
-	pulsoOsc.start();
+  asegurarReverb();
 
-	// armónico
-	pulsoOsc2 = new p5.Oscillator("triangle");
-	pulsoOsc2.freq(120);
-	pulsoOsc2.amp(0);
-	pulsoOsc2.start();
+  vozFiltro = new p5.LowPass();
+  vozFiltro.freq(1800);
+  vozFiltro.res(0.3);
 
-	pulsoEnv = new p5.Envelope();
-	pulsoEnv.setADSR(0.15, 0.3, 0.0, 0.8);
-	pulsoEnv.setRange(0.25, 0);
+  oscsSine = [];
+  oscsTri = [];
+  envsPulso = [];
 
-	reverb.process(pulsoOsc, 10, 4);
-	reverb.process(pulsoOsc2, 8, 3);
+  for (let i = 0; i < MAX_VOCES_PULSO; i++) {
+    const sOsc = new p5.Oscillator("sine");
+    sOsc.disconnect();
+    sOsc.connect(vozFiltro);
+    sOsc.amp(0);
+    sOsc.start();
+
+    // Armónico triangular apenas desafinado para textura de vidrio/campana
+    const tOsc = new p5.Oscillator("triangle");
+    tOsc.disconnect();
+    tOsc.connect(vozFiltro);
+    tOsc.amp(0);
+    tOsc.start();
+
+    const env = new p5.Envelope();
+
+    oscsSine.push(sOsc);
+    oscsTri.push(tOsc);
+    envsPulso.push(env);
+  }
+
+  if (reverb) reverb.process(vozFiltro, 7, 4);
 }
 
-function dispararPulso() {
-	const notas = [55, 62, 73]; // E–F–G más audibles
+function dispararPulsoCrecimiento(maduracion = 0, rssi = -70, frecuenciaNota = 146.83, nx = 0.5, entidadRef = null) {
+  if (typeof params !== "undefined") {
+    if (!params.pulsosEntidades) return;
+    if (params.volProbes !== undefined && params.volProbes <= 0.001) return;
+  }
+  if (frecuenciaNota === null || frecuenciaNota <= 0) return;
+  if (oscsSine.length === 0 || !vozFiltro) return;
 
-	const freq = random(notas);
+  if (entidadRef) {
+    entidadRef.brilloSonoro = 1.0;
+  }
 
-	pulsoOsc.freq(freq, 0.2);
-	pulsoOsc2.freq(freq * 2, 0.2);
+  const sOsc = oscsSine[idxVozPulso];
+  const tOsc = oscsTri[idxVozPulso];
+  const env = envsPulso[idxVozPulso];
+  idxVozPulso = (idxVozPulso + 1) % MAX_VOCES_PULSO;
 
-	pulsoEnv.play(pulsoOsc);
-	pulsoEnv.play(pulsoOsc2);
+  const panVal = map(constrain(nx, 0.0, 1.0), 0.0, 1.0, -0.8, 0.8);
+  if (typeof sOsc.pan === "function") {
+    sOsc.pan(panVal, 0.03);
+    tOsc.pan(panVal, 0.03);
+  }
+
+  sOsc.freq(frecuenciaNota, 0.02);
+  tOsc.freq(frecuenciaNota * 1.003, 0.02); // Leve desafinación para cuerpo de campana
+
+  const gananciaUsuario = (typeof params !== "undefined" && params.volProbes !== undefined) ? params.volProbes : 1.0;
+  const volumen = map(maduracion, 0, 1, 0.04, 0.16) * gananciaUsuario;
+
+  const duracion = map(maduracion, 0, 1, 1.2, 3.5); // Ataque suave, cola larga
+  env.setADSR(0.12, duracion * 0.4, 0.0, duracion * 0.6);
+  env.setRange(volumen, 0);
+
+  env.play(sOsc);
+  env.play(tOsc);
 }
 
-// ---------------- CAMPO SONORO ----------------
+// ---------------- 3. MOTOR DE ACORDES: OCTAVAS Y QUINTAS DE COLOR ----------------
 
-function actualizarCampo(densidad) {
-	let empujeFreq = 0;
-	let empujeAmp = 0;
+function iniciarConexionSonora() {
+  asegurarReverb();
 
-	for (const inf of influencias) {
-		empujeFreq += inf.fuerza * inf.vida * 25;
-		empujeAmp += inf.fuerza * inf.vida * 0.015;
-	}
+  filtroConexion = new p5.LowPass();
+  filtroConexion.freq(2200);
+  filtroConexion.res(0.3);
 
-	// DRONE
-	for (const d of drone) {
-		const n = noise(frameCount * 0.0002 + d.offset);
+  if (typeof p5.Gain !== "undefined") {
+    gainConexionesMaster = new p5.Gain();
+    filtroConexion.disconnect();
+    filtroConexion.connect(gainConexionesMaster);
+    gainConexionesMaster.amp(1.0);
+    if (reverb) reverb.process(gainConexionesMaster, 8, 4.5);
+  } else {
+    if (reverb) reverb.process(filtroConexion, 8, 4.5);
+  }
 
-		const base = map(n, 0, 1, 70, 130);
-		const f = base + empujeFreq * 0.1;
+  oscsConexionSine = [];
+  oscsConexionTri = [];
+  envsConexion = [];
 
-		d.osc.freq(f);
+  for (let i = 0; i < MAX_VOCES_CONEXION; i++) {
+    const sOsc = new p5.Oscillator("sine");
+    sOsc.disconnect();
+    sOsc.connect(filtroConexion);
+    sOsc.amp(0);
+    sOsc.start();
 
-		const a = (map(n, 0, 1, 0.02, 0.035) + empujeAmp) * params.volDrone;
-		d.osc.amp(a, 3);
-	}
+    const tOsc = new p5.Oscillator("triangle");
+    tOsc.disconnect();
+    tOsc.connect(filtroConexion);
+    tOsc.amp(0);
+    tOsc.start();
 
-	// CAPA MEDIA
-	for (const c of capa) {
-		const n = noise(frameCount * 0.0008 + c.offset);
+    const env = new p5.Envelope();
+    oscsConexionSine.push(sOsc);
+    oscsConexionTri.push(tOsc);
+    envsConexion.push(env);
+  }
+}
 
-		const base = map(n, 0, 1, 120, 260);
-		const f = base + empujeFreq * 0.2 + densidad * 30;
+function dispararAcordeGrupo(vocesCluster, distPromedio, conexionRef = null) {
+  if (typeof params !== "undefined") {
+    if (!params.pulsosEntidades) return;
+    if (params.volConexiones !== undefined && params.volConexiones <= 0.001) return;
+  }
+  if (oscsConexionSine.length === 0 || !filtroConexion || !vocesCluster || vocesCluster.length < 2) return;
 
-		c.osc.freq(f);
+  const vocesSonoras = vocesCluster.filter(v => v.freq !== null && v.freq > 0);
+  if (vocesSonoras.length === 0) return;
 
-		const a = (map(densidad, 0, 1, 0.005, 0.025) + empujeAmp) * params.volMedia;
-		c.osc.amp(a, 2);
-	}
+  const ahora = millis();
+  if (ahora - ultimoDisparoAcorde < INTERVALO_MIN_ACORDE) return;
+  ultimoDisparoAcorde = ahora;
 
-	// CAPA GRAVE
-	for (const g of capaGrave) {
-		const n = noise(frameCount * 0.00015 + g.offset);
+  // Tomamos las frecuencias base y armamos intervalos musicales (Octava arriba + Quinta justa/nota de color)
+  let baseFreq = vocesSonoras[0].freq;
+  let notasAcorde = [
+    baseFreq,
+    baseFreq * 1.5, // Quinta justa (puede generar notas de color consonantes)
+    baseFreq * 2.0  // Octava alta
+  ];
 
-		const base = map(n, 0, 1, 45, 90);
-		const f = base + empujeFreq * 0.05;
+  const numNotas = min(notasAcorde.length, MAX_VOCES_CONEXION);
+  const distRef = (typeof params !== "undefined" && params.distConexion) ? params.distConexion : 160;
 
-		g.osc.freq(f);
+  const gananciaConexiones = (typeof params !== "undefined" && params.volConexiones !== undefined) ? params.volConexiones : 1.0;
+  const volBase = (map(distPromedio, 0, distRef, 0.12, 0.04, true) / Math.sqrt(numNotas)) * gananciaConexiones;
+  const duracion = map(distPromedio, 0, distRef, 1.8, 3.8, true);
 
-		const a = (map(densidad, 0, 1, 0.03, 0.055) + empujeAmp) * params.volGrave;
-		g.osc.amp(a, 3);
-	}
+  if (conexionRef) {
+    conexionRef.destellar();
+  }
+
+  const delayPasoSegundos = 0.07;
+
+  for (let i = 0; i < numNotas; i++) {
+    const sOsc = oscsConexionSine[i];
+    const tOsc = oscsConexionTri[i];
+    const env = envsConexion[i];
+    const freq = notasAcorde[i];
+    const entidadVoz = vocesSonoras[i % vocesSonoras.length] ? vocesSonoras[i % vocesSonoras.length].entidad : null;
+    const nx = vocesSonoras[i % vocesSonoras.length] ? vocesSonoras[i % vocesSonoras.length].nx : 0.5;
+
+    const panIndividual = map(constrain(nx, 0.0, 1.0), 0.0, 1.0, -0.75, 0.75);
+    if (typeof sOsc.pan === "function") {
+      sOsc.pan(panIndividual, 0.03);
+      tOsc.pan(panIndividual, 0.03);
+    }
+
+    sOsc.freq(freq, 0.02);
+    tOsc.freq(freq * 1.004, 0.02);
+
+    const tAttack = 0.08 + (i * 0.05);
+    const tRelease = duracion * (0.7 + i * 0.1);
+
+    env.setADSR(tAttack, duracion * 0.3, 0.0, tRelease);
+    env.setRange(volBase, 0);
+
+    const retardoVoz = i * delayPasoSegundos;
+    env.play(sOsc, retardoVoz);
+    env.play(tOsc, retardoVoz);
+
+    if (entidadVoz) {
+      if (retardoVoz === 0) {
+        entidadVoz.brilloSonoro = 1.0;
+      } else {
+        setTimeout(() => {
+          if (entidadVoz) entidadVoz.brilloSonoro = 1.0;
+        }, retardoVoz * 1000);
+      }
+    }
+  }
+}
+
+function dispararSonidoMitosis(f1, f2, nx = 0.5) {
+  if (typeof params !== "undefined") {
+    if (!params.pulsosEntidades) return;
+    if (params.volConexiones !== undefined && params.volConexiones <= 0.001) return;
+  }
+  if ((f1 === null || f1 <= 0) && (f2 === null || f2 <= 0)) return;
+  if (oscsConexionSine.length < 2 || !filtroConexion) return;
+
+  let raiz = f1 !== null && f1 > 0 ? f1 : (f2 !== null && f2 > 0 ? f2 : 146.83);
+  const ganancia = (typeof params !== "undefined" && params.volConexiones !== undefined) ? params.volConexiones : 1.0;
+  const notas = [raiz, raiz * 1.5, raiz * 2.0];
+  const panBase = map(constrain(nx, 0.0, 1.0), 0.0, 1.0, -0.8, 0.8);
+
+  for (let i = 0; i < 3; i++) {
+    const sOsc = oscsConexionSine[i % oscsConexionSine.length];
+    const tOsc = oscsConexionTri[i % oscsConexionTri.length];
+    const env = envsConexion[i % envsConexion.length];
+
+    const panVoz = constrain(panBase + (i === 1 ? -0.2 : i === 2 ? 0.2 : 0), -0.8, 0.8);
+    if (typeof sOsc.pan === "function") {
+      sOsc.pan(panVoz, 0.01);
+      tOsc.pan(panVoz, 0.01);
+    }
+
+    sOsc.freq(notas[i], 0.01);
+    tOsc.freq(notas[i] * 1.003, 0.01);
+
+    env.setADSR(0.05 + i * 0.04, 0.2, 0.0, 0.9 + i * 0.2);
+    env.setRange(0.12 * ganancia, 0);
+
+    env.play(sOsc, i * 0.06);
+    env.play(tOsc, i * 0.06);
+  }
+}
+
+// ---------------- 4. ACTUALIZACIÓN DINÁMICA DEL DRONE CON TRÁFICO ----------------
+
+function actualizarCampo(densidad, maduracionPromedio = 0.5) {
+  const vGrave = (typeof params !== "undefined" && params.volGrave !== undefined) ? params.volGrave : 0.7;
+  const vDrone = (typeof params !== "undefined" && params.volDrone !== undefined) ? params.volDrone : 0.7;
+
+  // El volumen global de los drones sube y baja suavemente según la densidad de conexiones en la sala
+  const factorDucking = map(densidad, 0, 1, 0.35, 1.15, true);
+
+  if (gainConexionesMaster && typeof params !== "undefined" && params.volConexiones !== undefined) {
+    gainConexionesMaster.amp(params.volConexiones, 0.05);
+  }
+
+  if (filtroDrones) {
+    const corteFiltro = map(densidad, 0, 1, 380, 750, true);
+    filtroDrones.freq(corteFiltro);
+  }
+
+  for (let i = 0; i < dronesGrave.length; i++) {
+    const d = dronesGrave[i];
+    const marea = map(sin(frameCount * 0.0004 + d.seed), -1, 1, 0.6, 1.0);
+    const ampFinal = d.maxAmp * factorDucking * marea * ((i === 0) ? vGrave : vDrone);
+    d.osc.amp(ampFinal, 0.2);
+  }
 }
